@@ -14,9 +14,9 @@ def generate_launch_description():
    
     # K: what does this file even achieve if you can't set the world?
     world = os.path.join(
-        get_package_share_directory('pushback_sim'),
+        get_package_share_directory('override_sim'),
         'worlds',
-        'pushback.sdf'
+        'override.sdf'
     )
 
     gzserver_cmd = IncludeLaunchDescription(
@@ -34,7 +34,7 @@ def generate_launch_description():
     )
 
     # base file path for the package
-    vex_path = os.path.join(get_package_share_directory('pushback_sim'))
+    vex_path = os.path.join(get_package_share_directory('override_sim'))
 
     # secondary file paths for locating resources
     models_path = os.path.join(vex_path, 'models')

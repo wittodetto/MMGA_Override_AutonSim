@@ -4,7 +4,8 @@
     pkg_path: '/home/kymadogg/ros2_ws/src/mqp'
     intake_capacity: 10
     loader_capacity: 6
-    world_name: "pushback"
+    world_name: "override"
+    autonomous: False
     robot:
       model: "full"
       s_ai: True
@@ -12,9 +13,5 @@
     opponent:
       model: 'box'
       s_ai: False
-      start_position: (0,1)
+      start_position: (1.0, 0.0)
       color: 'blue'
-
-opponent:
-  ros__parameters:
-    world_name: "pb_2"

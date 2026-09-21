@@ -17,7 +17,7 @@ def generate_launch_description():
 
     # strategy AI bridge
     sai_bridge = Node(
-        package='pushback_sim',
+        package='override_sim',
         executable='strategy_ai_bridge.py',
         output='screen'
     )
@@ -28,7 +28,7 @@ def generate_launch_description():
     )
 
     ai_driver_node = Node(
-        package='pushback_sim',
+        package='override_sim',
         executable='ai_driver.py',
         output='screen'
     )

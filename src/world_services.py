@@ -1,401 +1,323 @@
 #!/usr/bin/env python3
+
+import math
+import os
+import random
+from collections import deque
+
 import rclpy
 import numpy as np
-import random
-
 from rclpy.node import Node
-from geometry_msgs.msg import PoseArray
 from scipy.spatial.transform import Rotation as R
-from vex_interfaces.msg import Ball, GoalState 
-from vex_interfaces.srv import OutputBall, Loader, IntakeBall 
+
+from geometry_msgs.msg import PoseArray
 from std_msgs.msg import Int64MultiArray
-from typing import Tuple, List
-from collections import deque
-from dataclasses import dataclass
 
-from ros_gz_interfaces.srv import DeleteEntity, SpawnEntity
-from ros_gz_interfaces.msg import EntityFactory, Entity
+from override_sim.msg import ToggleArray, ToggleState
+from override_sim.srv import FlipToggle, IntakeElement, LoadElement, ScoreElement
 
-@dataclass
-class Goal:
-    capacity: int
-    contents: deque
-    endpoints: List
-    height: float
+from ros_gz_interfaces.srv import DeleteEntity, SetEntityPose, SpawnEntity
+from ros_gz_interfaces.msg import Entity, EntityFactory
+
+from ament_index_python.packages import get_package_share_directory
+
+# color codes: 1 = red, 2 = blue, 3 = yellow
+PIN_MODELS = {
+    (1, 3): 'pin-ry',
+    (2, 3): 'pin-by',
+    (3, 3): 'pin-yy',
+    (1, 2): 'pin-rb',
+}
+
+# official element counts
+ELEMENTS_LEFT_INIT = [20, 20, 19, 4, 56]   # ry, by, yy, rb, cups
+
+GOAL_HEIGHTS = {
+    0: 0.2227, 1: 0.1465, 2: 0.1465, 3: 0.0825, 4: 0.0825,
+    5: 0.0825, 6: 0.0825, 7: 0.1465, 8: 0.1465,
+}
+GOAL_POSITIONS = {
+    0: (0.0, 0.0), 1: (-0.6, 1.2), 2: (-1.2, 0.6), 3: (-1.2, -0.6),
+    4: (-0.6, -1.2), 5: (0.6, 1.2), 6: (1.2, 0.6), 7: (1.2, -0.6),
+    8: (0.6, -1.2),
+}
+LOADER_POSITIONS = {
+    0: (-1.74, 1.49), 1: (-1.74, -1.49), 2: (1.74, 1.49), 3: (1.74, -1.49),
+}
+# toggle world poses: position + wall yaw; state roll = state * 120 deg
+TOGGLE_POSES = {
+    0: (0.0, 1.78, 0.0),
+    1: (1.78, 0.0, math.pi / 2),
+    2: (0.0, -1.78, 0.0),
+    3: (-1.78, 0.0, math.pi / 2),
+}
+
 
 class WorldServices(Node):
+    """Owns world-side game actions: robot intake, element placement on goals,
+    match loading onto loaders, and Toggle flipping. Also publishes toggle
+    state and the match phase."""
+
     def __init__(self):
         super().__init__('world_services')
 
-        # NOTE: red = 1, blue = 2!
+        self.declare_parameter('world_name', 'override')
+        self.declare_parameter('intake_capacity', 10)
+        self.declare_parameter('autonomous', False)
+        self.world_name = self.get_parameter('world_name').value
+        self.intake_capacity = self.get_parameter('intake_capacity').value
+        self.autonomous = self.get_parameter('autonomous').value
 
-        # subscribe to goal contents
-        self.create_subscription(GoalState, '/goals', self.save_goal_state, 10)
+        self.pkg_path = get_package_share_directory('override_sim')
 
-        # subscribe to otto's location
+        # robot pose (for dropping misplaced elements)
         self.create_subscription(PoseArray, '/otto_pose', self.robot_pose_callback, 10)
 
-        # publish robot hopper contents
-        self.robot_blocks = self.create_publisher(Int64MultiArray, '/robot_blocks', 10)
-        self.create_timer(0.5, self.update_hopper_status)
+        # publishers
+        self.robot_elements = self.create_publisher(
+            Int64MultiArray, '/robot_elements', 10)
+        self.elements_remaining = self.create_publisher(
+            Int64MultiArray, '/elements_remaining', 10)
+        self.toggles_pub = self.create_publisher(ToggleArray, '/toggles', 10)
+        self.phase_pub = self.create_publisher(Int64MultiArray, '/game_phase', 10)
 
-        # blocks left
-        self.blocks_remaining = self.create_publisher(Int64MultiArray, '/blocks_remaining', 10)
+        # services
+        self.srv_intake = self.create_service(
+            IntakeElement, '/robot_intake', self.intake_element)
+        self.srv_score = self.create_service(
+            ScoreElement, '/score_element', self.score_element)
+        self.srv_loader = self.create_service(
+            LoadElement, '/loader', self.load_element)
+        self.srv_toggle = self.create_service(
+            FlipToggle, '/flip_toggle', self.flip_toggle)
 
-        # my services
-        self.output_ball = self.create_service(OutputBall, '/score_ball', self.output_ball)
-        self.add_to_loader = self.create_service(Loader, '/loader', self.add_to_loader)
-        self.intake_ball = self.create_service(IntakeBall, '/robot_intake', self.intake_ball)
+        # gazebo service clients
+        self.remove_entity = self.create_client(
+            DeleteEntity, f'/world/{self.world_name}/remove')
+        self.spawn_entity = self.create_client(
+            SpawnEntity, f'/world/{self.world_name}/create')
+        self.set_pose = self.create_client(
+            SetEntityPose, f'/world/{self.world_name}/set_pose')
 
-        # gazebo services
-        self.remove_ball = self.create_client(DeleteEntity, '/world/pushback/remove')
-        self.spawn_ball = self.create_client(SpawnEntity, '/world/pushback/create')
+        # state
+        self.robot_intake = deque(maxlen=self.intake_capacity)
+        self.goal_stack_count = {gid: 0 for gid in GOAL_HEIGHTS}
+        self.toggle_states = {tid: 0 for tid in TOGGLE_POSES}
+        self.elements_left = list(ELEMENTS_LEFT_INIT)
+        self.name_counters = {}
 
-        # world and robot state variables
-        self.robot_intake = [1, 1]
-        self.blue_blocks_left = 12
-        self.red_blocks_left = 12
+        self.publish_elements_remaining()
+        self.publish_toggles()
 
-        blocks_rem_initial = Int64MultiArray()
-        blocks_rem_initial.data = [12, 12]
-        self.blocks_remaining.publish(blocks_rem_initial)
+        # match phase management
+        self.phase = 1
+        if self.autonomous:
+            self.phase = 0
+            self.create_timer(15.0, self.end_autonomous)
+        self.create_timer(1.0, self.publish_phase)
 
-        # goals represented as custom data types
-        self.goal_1_4 = Goal(
-            capacity = 15, # make a param
-            endpoints = [12, 42],
-            contents = deque(maxlen=16),
-            height = 0.39
-        )
-
-        self.goal_2_3 = Goal(
-            capacity = 15,
-            endpoints = [22, 32],
-            contents = deque(maxlen=16),
-            height = 0.39
-        )
-
-        self.center_mid = Goal(
-            capacity = 7,
-            endpoints = [11, 31],
-            contents = deque(maxlen=8),
-            height = 0.27
-        )
-
-        self.center_low = Goal(
-            capacity = 7,
-            endpoints = [21, 41],
-            contents = deque(maxlen=8),
-            height = 0.06
-        )
-
-        # locations (x, y, z)
-        self.goal_locations = {
-            11: (0.15, 0.15, 0.27),
-            12: (1.20, 0.57, 0.39),
-            21: (-0.15, 0.15, 0.06),
-            22: (-1.20, 0.57, 0.39),
-            31: (-0.15, -0.15, 0.27),
-            32: (-1.20, -0.57, 0.39),
-            41: (0.15, -0.15, 0.06),
-            42: (1.20, -0.57, 0.39)
-        }
-
-        self.loader_locations = {
-            13: (1.19, 1.72, 0.5),
-            23: (-1.19, 1.72, 0.5),
-            33: (-1.19, -1.72, 0.5),
-            43: (1.19, -1.72, 0.5)
-        }
-
-        self.goal_heights = {
-            1 : [21, 41], # low
-            2 : [11, 31], # medium
-            3 : [12, 22, 32, 42] # tall
-        }
-
-    def save_goal_state(self, msg:GoalState):
-        '''saves the goal state'''
-        self.goal_state = msg
-    
-    def robot_pose_callback(self, msg:PoseArray):
-        '''record the current pose of the robot'''
+    # ------------------------------------------------------------------
+    # callbacks
+    # ------------------------------------------------------------------
+    def robot_pose_callback(self, msg: PoseArray):
         self.robot_x = msg.poses[-1].position.x
         self.robot_y = msg.poses[-1].position.y
 
-        quat = msg.poses[-1].orientation
-        quat_array = np.array([quat.x, quat.y, quat.z, quat.w])
+    def end_autonomous(self):
+        if self.phase == 0:
+            self.get_logger().info("autonomous period ended")
+            self.phase = 1
 
-        # normalize
-        quat_norm = np.linalg.norm(quat_array)
-        if quat_norm > 0: 
-            quat_normalized = quat_array / quat_norm
-        else:
-            quat_normalized = quat_array 
-            
-        rotation = R.from_quat(quat_normalized)
+    def publish_phase(self):
+        msg = Int64MultiArray()
+        msg.data = [self.phase]
+        self.phase_pub.publish(msg)
 
-        euler = rotation.as_euler('xyz') # THIS IS IN RADIANS!
-        self.robot_r = euler[2] # get the yaw (z rotation) value from the returned array
-
-    # IntakeBall Service callback + functionality
-    def intake_ball(self, request, response): 
-        ''' Intake ball service callback function'''
-        if len(self.robot_intake) < 10: # if under max capacity
-            self.delete_block(request.ball_id)  
-            self.robot_intake.append(request.color)
-            self.get_logger().info(f'robot intake status: {self.robot_intake}')
-            response.success = True
-            return response
-        else:
-            self.get_logger().info("Hopper full")
-            self.get_logger().info(f'robot intake status: {self.robot_intake}')
+    # ------------------------------------------------------------------
+    # services
+    # ------------------------------------------------------------------
+    def intake_element(self, request: IntakeElement.Request, response):
+        if len(self.robot_intake) >= self.intake_capacity:
+            self.get_logger().info("robot intake full")
             response.success = False
             return response
 
-    # OutputBall Service callback + fucntionality 
-    def output_ball(self, request, response):
-        '''meta function that determines what action should occur with the ball being output based on 
-            current location, height attempted, and robot hopper status'''
-
-        if len(self.robot_intake) == 0: # no blocks in hopper edge case
-            # log that there is nothing to output
-            response.success = False
-            return response
-        
-        ball_color = self.robot_intake.pop(0) # get first item in robot_hopper (i think)
-        
-        def check_output_height(goal_id, height):
-            ''' helper for verifying height matches goal id '''
-            if goal_id in self.goal_heights.get(height):
-                return True
-            elif goal_id == 0 or goal_id not in self.goal_heights.get(height):
-                return False
-        
-        if check_output_height(request.goal_id, request.height): # output height matches goal id
-            self.score_goal(request.goal_id, ball_color)
-            self.get_logger().info(f'robot intake status: {self.robot_intake}')
-            response.success = True
-        else: 
-            self.drop_ball(ball_color)
-            self.get_logger().info(f'robot intake status: {self.robot_intake}')
-            response.success = True
-        return response
-
-    def drop_ball(self, ball_color:int):
-        '''handles if the robot has blocks but is not in a scoring location or wrong height is called'''
-        drop_x = self.robot_x + random.uniform(-0.3, 0.3) 
-        drop_y = self.robot_y + random.uniform(-0.3, 0.3)
-
-        self.spawn_block(ball_color, drop_x, drop_y, 0.4)
-        self.get_logger().info("dropped ball!")
-        
-    def score_goal(self, goal_id:int, color:int):
-        '''logic that is executed when a goal is scored on'''
-
-        self.clear_goal(goal_id)
-        
-        match goal_id:
-            case 11:
-                self.center_mid.contents.appendleft(color)
-                self.update_goal_entities(self.center_mid, color, True)
-            case 21:
-                self.center_low.contents.appendleft(color)
-                self.update_goal_entities(self.center_low, color, True)
-            case 31:
-                self.center_mid.contents.append(color)
-                self.update_goal_entities(self.center_mid, color, False)
-            case 41:
-                self.center_low.contents.append(color)
-                self.update_goal_entities(self.center_low, color, False)
-            case 12:
-                self.goal_1_4.contents.appendleft(color)
-                self.update_goal_entities(self.goal_1_4, color, True)
-            case 22:
-                self.goal_2_3.contents.appendleft(color)
-                self.update_goal_entities(self.goal_2_3, color, True)
-            case 32:
-                self.goal_2_3.contents.append(color)
-                self.update_goal_entities(self.goal_2_3, color, False)
-            case 42:
-                self.goal_1_4.contents.append(color)
-                self.update_goal_entities(self.goal_1_4, color, False)
-            
-    def update_goal_entities(self, goal:Goal, color:int, left:bool):
-        '''updates the goal entity that was just scored on'''
-
-        def calc_goal_shift(goal:Goal, input_coords:Tuple[int], left: bool):
-            '''helper for calculating the spawn point for each goal when its capacity is reached'''
-            x, y, z = input_coords
-            tol = 0.08
-
-            if goal.height == 0.39: # long goals
-                if left:  y = y + tol # eventually will be a parameter...
-                else: y = y - tol
-            
-            elif goal.height == 0.27: # top center
-               if left: x, y = x + tol, y + tol
-               else: x, y = x - tol, y - tol
-
-            elif goal.height == 0.06: # lower center
-                if left: x, y = x - tol, y + tol
-                else: x, y = x + tol, y - tol
-
-            return x, y, z
-
-        if len(goal.contents) == goal.capacity + 1: # max deque capacity is goal capacity + 1 to prevent data loss
-            if left:
-                dropped_ball = goal.contents.pop() # if scoring left, want to pop right
-                x, y, z = self.goal_locations[goal.endpoints[1]] # want the opposite endpoint from the scoring one
-                x, y, z = calc_goal_shift(goal, (x, y, z), False)
-                self.spawn_block(dropped_ball, x, y, z)
-                
-            else:
-                dropped_ball = goal.contents.popleft()
-                x, y, z = self.goal_locations[goal.endpoints[0]]
-                x, y, z = calc_goal_shift(goal, (x, y, z), True)
-                self.spawn_block(dropped_ball, x, y, z)
-
-        points = self.get_intermediate_points(  
-            self.goal_locations[goal.endpoints[0]][:2],  # (x, y) from first endpoint
-            self.goal_locations[goal.endpoints[1]][:2],  # (x, y) from second endpoint
-            goal.capacity 
-        )
-
-        self.get_logger().info(f"Goal contents: {goal.contents}")
-        
-        for (x,y), color in zip(points, goal.contents):
-            self.spawn_block(color, x, y, goal.height)
-
-    def clear_goal(self, goal_id:int):
-        '''remove all of the blocks from a goal'''
-        if goal_id == 22 or goal_id == 32: # long goal b
-            for block in self.goal_state.long_b.object_array:
-               self.delete_block(block.id)
-            
-        elif goal_id == 42 or goal_id == 12: # long goal a
-            for block in self.goal_state.long_a.object_array:
-               self.delete_block(block.id)
-
-        elif goal_id == 11 or goal_id == 31: # center high
-            for block in self.goal_state.center_high.object_array:
-               self.delete_block(block.id)
-
-        elif goal_id == 21 or goal_id == 41: # center low
-            for block in self.goal_state.center_low.object_array:
-               self.delete_block(block.id)
-    
-    def update_hopper_status(self):
-        '''update the status of the robot hopper'''
-        hopper_msg = Int64MultiArray()
-        hopper_msg.data = self.robot_intake
-        self.robot_blocks.publish(hopper_msg)
-
-    # Loader service functions
-    def add_to_loader(self, request:Loader.Request, response):
-        '''spawn ball slightly above loader'''
-
-        # TODO: prevent service from spawning a ball if there are 6 on the loader already
-
-        ball = EntityFactory()
-        ball.allow_renaming = True
-
-        if request.color == 1:
-            if self.red_blocks_left == 0:
-                response.success = False 
-                self.get_logger().info(f"NO RED BLOCKS LEFT!!!")
-                return response
-            model_pkg_path = '/home/kymadogg/ros2_ws/src/mqp/pushback_sim/models/red-sphere/model.sdf' # make sure to make this a parameter!
-            self.red_blocks_left = self.red_blocks_left - 1
-            self.get_logger().info(f"Red blocks left: {self.red_blocks_left}")
-
-        if request.color == 2:
-            if self.blue_blocks_left == 0:
-                response.success = False 
-                self.get_logger().info(f"NO BLUE BLOCKS LEFT!!!")
-                return response
-            model_pkg_path = '/home/kymadogg/ros2_ws/src/mqp/pushback_sim/models/blue-sphere/model.sdf'
-            self.blue_blocks_left = self.blue_blocks_left - 1
-            self.get_logger().info(f"Blue blocks left: {self.blue_blocks_left}")
-        
-        elif request.color != 1 or request.color != 2 :
-            response.success = False
-            return response
-        
-        ball.sdf_filename = model_pkg_path
-        loader_pose = self.loader_locations[request.loader_id]
-        ball.pose.position.x = loader_pose[0]
-        ball.pose.position.y = loader_pose[1]
-        ball.pose.position.z = loader_pose[2]
-
-        loader_req = SpawnEntity.Request()
-        loader_req.entity_factory = ball
-        
-        self.spawn_ball.call_async(loader_req)
-
-        self.get_logger().info(f"added block to loader {request.loader_id}")
-        self.update_loader_blocks_left() # send update to strategy AI
+        self.delete_entity(request.entity_id)
+        self.robot_intake.append(
+            (request.entity_type, request.top_color, request.bottom_color))
+        self.get_logger().info(
+            f"robot intake: {list(self.robot_intake)}")
+        self.publish_robot_elements()
         response.success = True
         return response
 
-    # Helper functions (entities)
-    def spawn_block(self, color:int, x:float, y:float, z:float):
-        '''SpawnEntity wrapper function for spawning in a block'''
-        ball = EntityFactory()
-        ball.allow_renaming = True
-
-        if color == 1:
-            model_pkg_path = '/home/kymadogg/ros2_ws/src/mqp/pushback_sim/models/red-sphere/model.sdf'
-
-        elif color == 2:
-            model_pkg_path = '/home/kymadogg/ros2_ws/src/mqp/pushback_sim/models/blue-sphere/model.sdf'
-        
-        ball.sdf_filename = model_pkg_path
-        ball.pose.position.x = x
-        ball.pose.position.y = y
-        ball.pose.position.z = z
-
-        spawn_req = SpawnEntity.Request()
-        spawn_req.entity_factory = ball
-        
-        self.spawn_ball.call_async(spawn_req)
-        return True
-    
-    def update_loader_blocks_left(self):
-        blocks_left = Int64MultiArray()
-        blocks_left.data = [self.red_blocks_left, self.blue_blocks_left]
-        self.blocks_remaining.publish(blocks_left)
-
-    def delete_block(self, entity_id): # msg = ball id
-        '''DeleteEntity wrapper function for deleting a block'''
-        ball = Entity()
-        ball.id = int(entity_id)  # copy id of picked up ball to entity
-        delete_req = DeleteEntity.Request()
-        delete_req.entity = ball
-        self.remove_ball.call_async(delete_req)
-    
-    def ball_color(self, ball:Ball):
-        '''return ball color. red = 1, blue = 2'''
-        red_identifyers = ["red", "R"]
-        if any(sub in ball.object_name for sub in red_identifyers):
-            return 1
+    def score_element(self, request: ScoreElement.Request, response):
+        # pick the element to place: explicit colors win, else first in intake
+        if request.top_color != 0 or request.bottom_color != 0:
+            el_type = request.element_type
+            top, bottom = request.top_color, request.bottom_color
         else:
-            return 2
+            if not self.robot_intake:
+                self.get_logger().info("nothing to place")
+                response.success = False
+                return response
+            el_type, top, bottom = self.robot_intake.popleft()
 
-    def get_intermediate_points(self, p1, p2, num_points):
-        '''how i find the locations of each ball'''
-        if num_points < 2:
-            return [p1, p2] if p1 != p2 else [p1]
-            
-        x1, y1 = p1
-        x2, y2 = p2
-        
-        x_coords = np.linspace(x1, x2, num_points)
-        y_coords = np.linspace(y1, y2, num_points)
-        
-        points = list(zip(x_coords, y_coords))
-        return points
-    
+        goal_id = request.goal_id
+        if goal_id not in GOAL_POSITIONS:
+            # not at a goal: drop near the robot
+            x = self.robot_x + random.uniform(-0.3, 0.3)
+            y = self.robot_y + random.uniform(-0.3, 0.3)
+            self.spawn_element(el_type, top, bottom, x, y, 0.3)
+            self.get_logger().info("dropped element near robot")
+        else:
+            gx, gy = GOAL_POSITIONS[goal_id]
+            z = GOAL_HEIGHTS[goal_id] + self.goal_stack_count[goal_id] * 0.17 + 0.02
+            self.spawn_element(el_type, top, bottom, gx, gy, z)
+            self.goal_stack_count[goal_id] += 1
+            self.get_logger().info(
+                f"placed element type {el_type} on goal {goal_id}")
+
+        self.publish_robot_elements()
+        response.success = True
+        return response
+
+    def load_element(self, request: LoadElement.Request, response):
+        loader_id = request.loader_id
+        if loader_id not in LOADER_POSITIONS:
+            response.success = False
+            return response
+
+        model_name = self.element_model(
+            request.element_type, request.top_color, request.bottom_color)
+        if model_name is None or not self.take_one_element(
+                request.element_type, request.top_color, request.bottom_color):
+            self.get_logger().info("no matching elements left")
+            response.success = False
+            return response
+
+        lx, ly = LOADER_POSITIONS[loader_id]
+        self.spawn_element(request.element_type, request.top_color,
+                           request.bottom_color, lx, ly, 0.45)
+        self.get_logger().info(f"loaded element onto loader {loader_id}")
+        self.publish_elements_remaining()
+        response.success = True
+        return response
+
+    def flip_toggle(self, request: FlipToggle.Request, response):
+        toggle_id = request.toggle_id
+        if toggle_id not in TOGGLE_POSES:
+            response.success = False
+            return response
+
+        if request.state < 0:
+            new_state = (self.toggle_states[toggle_id] + 1) % 3
+        else:
+            new_state = request.state % 3
+
+        self.toggle_states[toggle_id] = new_state
+        self.rotate_toggle(toggle_id, new_state)
+        self.publish_toggles()
+        self.get_logger().info(
+            f"toggle {toggle_id} -> state {new_state}")
+        response.success = True
+        response.new_state = new_state
+        return response
+
+    # ------------------------------------------------------------------
+    # gazebo helpers
+    # ------------------------------------------------------------------
+    def element_model(self, el_type, top, bottom):
+        if el_type == 1:                      # pin
+            return PIN_MODELS.get((bottom, top))
+        if el_type == 2:                      # cup
+            return 'cup'
+        return None
+
+    def spawn_element(self, el_type, top, bottom, x, y, z, yaw=0.0):
+        model = self.element_model(el_type, top, bottom)
+        if model is None:
+            self.get_logger().warning("unknown element, not spawning")
+            return
+
+        counter = self.name_counters.setdefault(model, 100)
+        self.name_counters[model] = counter + 1
+        name = f"{model.replace('-', '_')}_{counter}"
+
+        factory = EntityFactory()
+        factory.name = name
+        factory.allow_renaming = True
+        factory.sdf_filename = os.path.join(
+            self.pkg_path, 'models', model, 'model.sdf')
+        factory.pose.position.x = x
+        factory.pose.position.y = y
+        factory.pose.position.z = z
+        q = R.from_euler('z', yaw).as_quat()
+        factory.pose.orientation.x = q[0]
+        factory.pose.orientation.y = q[1]
+        factory.pose.orientation.z = q[2]
+        factory.pose.orientation.w = q[3]
+
+        req = SpawnEntity.Request()
+        req.entity_factory = factory
+        self.spawn_entity.call_async(req)
+
+    def delete_entity(self, entity_id):
+        entity = Entity()
+        entity.id = int(entity_id)
+        req = DeleteEntity.Request()
+        req.entity = entity
+        self.remove_entity.call_async(req)
+
+    def rotate_toggle(self, toggle_id, state):
+        x, y, base_yaw = TOGGLE_POSES[toggle_id]
+        roll = state * (2 * math.pi / 3)
+        q = (R.from_euler('z', base_yaw) * R.from_euler('x', roll)).as_quat()
+        req = SetEntityPose.Request()
+        req.entity.name = f'toggle_{toggle_id + 1}'
+        req.pose.position.x = x
+        req.pose.position.y = y
+        req.pose.position.z = 0.0
+        req.pose.orientation.x = q[0]
+        req.pose.orientation.y = q[1]
+        req.pose.orientation.z = q[2]
+        req.pose.orientation.w = q[3]
+        self.set_pose.call_async(req)
+
+    # ------------------------------------------------------------------
+    # bookkeeping publishers
+    # ------------------------------------------------------------------
+    def take_one_element(self, el_type, top, bottom):
+        idx = 4 if el_type == 2 else list(PIN_MODELS).index((bottom, top))
+        if self.elements_left[idx] <= 0:
+            return False
+        self.elements_left[idx] -= 1
+        return True
+
+    def publish_robot_elements(self):
+        msg = Int64MultiArray()
+        msg.data = []
+        for el_type, top, bottom in self.robot_intake:
+            msg.data.extend([el_type, top, bottom])
+        self.robot_elements.publish(msg)
+
+    def publish_elements_remaining(self):
+        msg = Int64MultiArray()
+        msg.data = self.elements_left
+        self.elements_remaining.publish(msg)
+
+    def publish_toggles(self):
+        msg = ToggleArray()
+        quadrant_map = {0: 'N', 1: 'E', 2: 'S', 3: 'W'}
+        for tid in sorted(self.toggle_states):
+            t = ToggleState()
+            t.toggle_id = tid
+            t.state = self.toggle_states[tid]
+            t.quadrant = quadrant_map[tid]
+            msg.toggles.append(t)
+        self.toggles_pub.publish(msg)
+
+
 def main(args=None):
     rclpy.init(args=args)
     node = WorldServices()
@@ -408,6 +330,6 @@ def main(args=None):
         if rclpy.ok():
             rclpy.shutdown()
 
+
 if __name__ == '__main__':
     main()
-

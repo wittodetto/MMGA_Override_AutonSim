@@ -1,381 +1,276 @@
 #!/usr/bin/env python3
+
+import math
+
 import rclpy
 import numpy as np
-
 from rclpy.node import Node
-from sensor_msgs.msg import Joy
-from geometry_msgs.msg import PoseArray, Point
-from std_msgs.msg import Int64MultiArray
 from scipy.spatial.transform import Rotation as R
-from vex_interfaces.msg import Ball, BallArray, GoalState, LoaderState
-from typing import Tuple
-from vex_interfaces.srv import IntakeBall, OutputBall
 
-# NOTE: Might want to consider moving the location checking to world_services. Also might want to split the controller callbacks to another node...
-# NOTE: at some point i need to move all of the common locations into another class so that everything uses the same reference points
+from sensor_msgs.msg import Joy
+from geometry_msgs.msg import PoseArray
+from std_msgs.msg import Int64MultiArray
+
+from override_sim.msg import (
+    CupElement, FieldElement, FieldElementArray, GoalArray, GoalState,
+    PinElement, ToggleArray,
+)
+from override_sim.srv import FlipToggle, IntakeElement, ScoreElement
+
+# ---------------------------------------------------------------------------
+# Override field reference data (meters, field center at origin)
+# ---------------------------------------------------------------------------
+# goal_id: (x, y, type, quadrant, height)
+# type: 0 = tall neutral center, 1 = short neutral, 2 = red alliance, 3 = blue
+GOALS = {
+    0: (0.0, 0.0, 0, 'C', 0.2227),
+    1: (-0.6, 1.2, 1, 'N', 0.1465),
+    2: (-1.2, 0.6, 1, 'W', 0.1465),
+    3: (-1.2, -0.6, 2, 'W', 0.0825),
+    4: (-0.6, -1.2, 2, 'S', 0.0825),
+    5: (0.6, 1.2, 3, 'N', 0.0825),
+    6: (1.2, 0.6, 3, 'E', 0.0825),
+    7: (1.2, -0.6, 1, 'E', 0.1465),
+    8: (0.6, -1.2, 1, 'S', 0.1465),
+}
+
+TOGGLE_QUADRANTS = {0: 'N', 1: 'E', 2: 'S', 3: 'W'}
+
+LOADERS = {
+    0: (-1.74, 1.49),   # red station, top-left
+    1: (-1.74, -1.49),  # red station, bottom-left
+    2: (1.74, 1.49),    # blue station, top-right
+    3: (1.74, -1.49),   # blue station, bottom-right
+}
+
+GOAL_XY_TOL = 0.13       # horizontal distance from goal center that counts
+LOADER_XY_TOL = 0.14
+GOAL_ENGAGE_TOL = 0.02   # base may sink this much below the goal rim
+GOAL_MAX_HEIGHT = 0.35   # element base may be this high above the rim
+
 
 class FieldLocation(Node):
+    """Classifies every scoring object into goals / loaders / field and
+    publishes the resulting GoalArray. Also turns controller buttons into
+    intake / placement / toggle-flip service calls."""
+
     def __init__(self):
         super().__init__('field_location')
-        # subscribe to teleop controller feedback
+
+        # teleop controller feedback
         self.create_subscription(Joy, '/joy', self.controller_callback, 10)
-
-        # subscribe to pose_bridge.py's output topic
-        self.create_subscription(BallArray, '/_object_locations', self.object_location_callback, 10)
-
-        # publishers for entities in goals and loaders
-        self.goals = self.create_publisher(GoalState, '/goals', 10)
-        self.loaders = self.create_publisher(LoaderState, '/loaders', 10)
-        self.field_objects = self.create_publisher(BallArray, '/field_objects', 10)
-
-        # robot location / pose subscriber
+        # element poses from pose_bridge.py
+        self.create_subscription(
+            FieldElementArray, '/_object_locations', self.object_location_callback, 10)
+        # robot pose
         self.create_subscription(PoseArray, '/otto_pose', self.robot_pose_callback, 10)
+        # toggle states from world_services.py
+        self.create_subscription(ToggleArray, '/toggles', self.toggle_callback, 10)
 
-        # service client for intaking a ball
-        self.intake_ball = self.create_client(IntakeBall, '/robot_intake')
-        self.ball_action = self.create_client(OutputBall, '/score_ball')
+        # publishers
+        self.goals = self.create_publisher(GoalArray, '/goals', 10)
+        self.loaders = self.create_publisher(Int64MultiArray, '/loaders', 10)
+        self.field_objects = self.create_publisher(
+            FieldElementArray, '/field_objects', 10)
 
-        self.tol = (0.2, 0.2, 0.1)
-        self.z_tol = 0.01
+        # service clients
+        self.intake_element = self.create_client(IntakeElement, '/robot_intake')
+        self.score_element = self.create_client(ScoreElement, '/score_element')
+        self.flip_toggle = self.create_client(FlipToggle, '/flip_toggle')
 
         # controller debounce
-        self.prev_button_0 = 0
-        self.prev_button_1 = 0
-        self.prev_button_2 = 0 
-        self.prev_button_3 = 0
+        self.prev_buttons = [0] * 4
 
-    def controller_callback(self, msg:Joy):
-        '''handle controller input'''
+        self.toggle_states = {0: 0, 1: 0, 2: 0, 3: 0}
+        self.elements = FieldElementArray()
 
-        # check controller input for the intake / scoring buttons being pressed
-        if msg.buttons[1] == 1 and self.prev_button_1 == 0: # output mid (PS4: )
-            self.scoring_callback(2)
-        elif msg.buttons[0] == 1 and self.prev_button_0 == 0: # activate intake (PS4: 0)
+    # ------------------------------------------------------------------
+    # callbacks
+    # ------------------------------------------------------------------
+    def controller_callback(self, msg: Joy):
+        buttons = list(msg.buttons[:4]) if len(msg.buttons) >= 4 else list(msg.buttons)
+        if buttons[0] == 1 and self.prev_buttons[0] == 0:      # intake
             self.check_collision()
-        elif msg.buttons[2] ==1 and self.prev_button_2 == 0: # output high (PS4: square)
-            self.scoring_callback(3)
-        elif msg.buttons[3] == 1 and self.prev_button_3 == 0: # output low (PS4: )
+        elif buttons[1] == 1 and self.prev_buttons[1] == 0:    # place pin
             self.scoring_callback(1)
+        elif buttons[2] == 1 and self.prev_buttons[2] == 0:    # place cup
+            self.scoring_callback(2)
+        elif buttons[3] == 1 and self.prev_buttons[3] == 0:    # flip toggle
+            self.flip_nearest_toggle()
+        self.prev_buttons = buttons
 
-        self.prev_button_0 = msg.buttons[0]
-        self.prev_button_1 = msg.buttons[1]
-        self.prev_button_2 = msg.buttons[2]
-        self.prev_button_3 = msg.buttons[3]
-
-    def robot_pose_callback(self, msg:PoseArray):
-        '''record the current pose of the robot'''
+    def robot_pose_callback(self, msg: PoseArray):
         self.robot_x = msg.poses[-1].position.x
         self.robot_y = msg.poses[-1].position.y
-
         quat = msg.poses[-1].orientation
-        quat_array = np.array([quat.x, quat.y, quat.z, quat.w])
+        q = np.array([quat.x, quat.y, quat.z, quat.w])
+        q = q / (np.linalg.norm(q) or 1.0)
+        self.robot_r = float(R.from_quat(q).as_euler('xyz')[2])
 
-        # normalize
-        quat_norm = np.linalg.norm(quat_array)
-        if quat_norm > 0: 
-            quat_normalized = quat_array / quat_norm
-        else:
-            quat_normalized = quat_array 
-    
-        rotation = R.from_quat(quat_normalized)
+    def toggle_callback(self, msg: ToggleArray):
+        for t in msg.toggles:
+            self.toggle_states[t.toggle_id] = t.state
 
-        euler = rotation.as_euler('xyz') # THIS IS IN RADIANS!
-        self.robot_r = euler[2] # get the yaw (z rotation) value from the returned array
-    
-    def object_location_callback(self, msg:BallArray):
-        '''read all of the objects published from the pose_bridge node and see if they are in a goal or not '''
-        self.objects = msg
+    def object_location_callback(self, msg: FieldElementArray):
+        self.elements = msg
 
-        self.field_blocks = BallArray()
+        goal_stacks = {gid: [] for gid in GOALS}
+        loader_contents = {lid: [] for lid in LOADERS}
+        field_elems = FieldElementArray()
 
-        goal_state = GoalState()
-        long_1_4 = []
-        long_2_3 = []
-        center_low = []
-        center_high = []
+        for el in msg.elements:
+            base_z = el.location.z  # model origin == element base
+            x, y = el.location.x, el.location.y
+            placed = False
 
-        loader_state = LoaderState()
+            # check goals (lowest id wins to keep assignment deterministic)
+            for gid, (gx, gy, _gtype, _gquad, gheight) in GOALS.items():
+                if math.hypot(x - gx, y - gy) < GOAL_XY_TOL:
+                    if gheight - GOAL_ENGAGE_TOL <= base_z <= gheight + GOAL_MAX_HEIGHT:
+                        goal_stacks[gid].append(el)
+                        placed = True
+                        break
 
-        def dist_from_line(p1:tuple, p2:tuple, p3:tuple):
-            '''distance a ball is from the line formed by the two ends of the goal'''
-            p1 = np.array(p1)
-            p2 = np.array(p2)
-            p3 = np.array(p3)
-           
-            p1p2_vec = p2 - p1
-            p1p3_vec = p3 - p1
-            
-            cross_product_mag = np.linalg.norm(np.cross(p1p2_vec, p1p3_vec), axis=-1) if p3.ndim > 1 else np.linalg.norm(np.cross(p1p2_vec, p1p3_vec))
-            
-            p1p2_mag = np.linalg.norm(p1p2_vec)
-            
-            if p1p2_mag == 0:
-                return np.linalg.norm(p1p3_vec, axis=-1) if p3.ndim > 1 else np.linalg.norm(p1p3_vec)
+            if placed:
+                continue
 
-            return cross_product_mag / p1p2_mag
+            # check loaders
+            for lid, (lx, ly) in LOADERS.items():
+                if (abs(x - lx) < LOADER_XY_TOL and abs(y - ly) < LOADER_XY_TOL
+                        and base_z < 0.4):
+                    loader_contents[lid].append(el)
+                    placed = True
+                    break
 
-        # sort the ball array into the different goals. there is probably a way better way to do this that I am not doing. 
-        # TODO: refactor all of this later.
+            if not placed:
+                field_elems.elements.append(el)
 
-        for ball in msg.object_array: 
-            ball_xy = (ball.location.x, ball.location.y)
-            if ball.location.z > 0.38: # long goals
-                if self.in_bounds(ball_xy, (1.20, 0), (0.06, 0.7)): # if in goal_1_4
-                    long_1_4.append(ball)
-                elif self.in_bounds(ball_xy, (-1.20, 0), (0.06, 0.7)): # if in goal_2_3
-                    long_2_3.append(ball)
-            elif self.in_bounds(ball_xy, (0.0, 0.0), (0.20, 0.20)): # center goals
-                if 0.20 < ball.location.z < 0.31 and dist_from_line((0.15, 0.15), (-0.15, -0.15), ball_xy) < 0.05: # top center goal
-                    center_high.append(ball)
-                elif 0.05 < ball.location.z < 0.10 and dist_from_line((-0.15, 0.15), (0.15, -0.15), ball_xy) < 0.05: # lower center goal
-                    center_low.append(ball)
-            else:
-                self.field_blocks.object_array.append(ball) # on the field
-        
-        def calc_center_ctrl_zone(goal:BallArray):
-            '''
-            calculates which team gets a control zones bonus 
+        # build the GoalArray
+        goal_array = GoalArray()
+        for gid in sorted(GOALS):
+            gx, gy, gtype, gquad, gheight = GOALS[gid]
+            stack = sorted(goal_stacks[gid], key=lambda e: e.location.z)
+            gs = GoalState()
+            gs.goal_id = gid
+            gs.goal_type = gtype
+            gs.quadrant = gquad
+            gs.toggle_state = self.toggle_states.get(
+                self.quadrant_to_toggle(gquad), 0)
+            for el in stack:
+                if el.element_type == 1:
+                    pin = PinElement()
+                    pin.object_name = el.object_name
+                    pin.id = el.id
+                    pin.top_color = el.top_color
+                    pin.bottom_color = el.bottom_color
+                    pin.location = el.location
+                    pin.orientation = el.orientation
+                    gs.pins.append(pin)
+                else:
+                    cup = CupElement()
+                    cup.object_name = el.object_name
+                    cup.id = el.id
+                    cup.location = el.location
+                    cup.orientation = el.orientation
+                    cup.yaw = self.quat_to_yaw(el.orientation)
+                    gs.cups.append(cup)
+            goal_array.goals.append(gs)
 
-            0 = no control of the goal
-            1 = red controls the goal
-            2 = blue controls the goal
-            '''
+        # publish
+        self.goals.publish(goal_array)
 
-            if len(goal) == 0: # no blocks in goal
-                return 0
-            
-            for ball in goal:
-                red_ct, blue_ct = 0, 0
-                if ball.color == 1:
-                    red_ct += 1
-                elif ball.color == 2:
-                    blue_ct += 1
-            
-            if red_ct > blue_ct:
-                return 1
-            if blue_ct > red_ct:
-                return 2
-            else: 
-                return 0
-            
-        # control zone centers/params
-        long_a_center = (1.20, 0.00)
-        long_b_center = (-1.20, 0.00)
-        ctrl_width = 0.294
-            
-        def is_in_long_ctrl_zone(ball, center, ctrl_width):
-            tol = ctrl_width / 2
-            return abs(ball.location.x - center[0]) < tol and abs(ball.location.y - center[1]) < tol
+        loader_msg = Int64MultiArray()
+        loader_msg.data = [len(loader_contents[i]) for i in sorted(LOADERS)]
+        self.loaders.publish(loader_msg)
 
-        def calc_long_ctrl_zone(goal: BallArray, center):
-            red_ct, blue_ct = 0, 0
-            for ball in goal:
-                if is_in_long_ctrl_zone(ball, center, ctrl_width):
-                    if ball.color == 1:
-                        red_ct += 1
-                    elif ball.color == 2:
-                        blue_ct += 1
-            if red_ct > blue_ct:
-                return 1
-            elif blue_ct > red_ct:
-                return 2
-            else:
-                return 0
-        
-        def calc_loader_contents(quadrant:int, balls: BallArray):
-            centers = [(1.19, 1.72), 
-                       (-1.19, 1.72),
-                       (-1.19, -1.72),
-                       (1.19, -1.72)]
-            
-            tol = (0.05, 0.05)
-            
-            center_idx = quadrant - 1
-            center = centers[center_idx]
-            loader_balls = []
-            color_balls = []
+        self.field_objects.publish(field_elems)
 
-            for ball in balls.object_array:
-                if self.in_bounds((ball.location.x, ball.location.y), center, tol):
-                    loader_balls.append(ball)
-                    if ball in self.field_blocks.object_array:
-                        self.field_blocks.object_array.remove(ball)
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def quat_to_yaw(orientation):
+        q = np.array([orientation.x, orientation.y, orientation.z, orientation.w])
+        q = q / (np.linalg.norm(q) or 1.0)
+        return float(R.from_quat(q).as_euler('xyz')[2])
 
-            # sort by z height
-            loader_balls.sort(key=lambda x: x.location.z)
+    @staticmethod
+    def quadrant_to_toggle(quadrant):
+        for tid, q in TOGGLE_QUADRANTS.items():
+            if q == quadrant:
+                return tid
+        return -1
 
-            for ball in loader_balls:
-                color_balls.append(ball.color)
-
-            return color_balls
-
-        # build the updated GoalState message
-        goal_state = GoalState()
-        goal_state.center_low = BallArray()
-        goal_state.center_low.object_array = center_low
-        
-        goal_state.center_high = BallArray()
-        goal_state.center_high.object_array = center_high
-        
-        goal_state.long_a = BallArray()
-        goal_state.long_a.object_array = long_1_4
-        
-        goal_state.long_b = BallArray()
-        goal_state.long_b.object_array = long_2_3
-
-        # update control zone status
-        goal_state.center_low_ctrl = calc_center_ctrl_zone(center_low)
-        goal_state.center_high_ctrl = calc_center_ctrl_zone(center_high)
-        goal_state.long_a_ctrl = calc_long_ctrl_zone(long_1_4, long_a_center)
-        goal_state.long_b_ctrl = calc_long_ctrl_zone(long_2_3, long_b_center)
-
-        # build the LoaderState message
-        loader_state = LoaderState()
-        loader_state.loader_q1 = Int64MultiArray() 
-        loader_state.loader_q1.data = calc_loader_contents(1, msg)
-
-        loader_state.loader_q2 = Int64MultiArray() 
-        loader_state.loader_q2.data = calc_loader_contents(2, msg)
-
-        loader_state.loader_q3 = Int64MultiArray() 
-        loader_state.loader_q3.data = calc_loader_contents(3, msg)
-
-        loader_state.loader_q4 = Int64MultiArray() 
-        loader_state.loader_q4.data = calc_loader_contents(4, msg)
-
-        # publish the goal message
-        self.goals.publish(goal_state)
-
-        # publish the loader message
-        self.loaders.publish(loader_state)
-
-        # self.get_logger().info(f'number of blocks on the {num_blocks}')
-        self.field_objects.publish(self.field_blocks)
-            
     def check_collision(self):
-        '''did the robot collide with a ball or not'''
-        h, k = self.robot_x, self.robot_y
-        th = self.robot_r
-        
-        offset = 0.15 
-        
-        x = h + offset * np.cos(th)
-        y = k + offset * np.sin(th)
+        """Is there a scoring element in the robot's intake zone?"""
+        h, k, th = self.robot_x, self.robot_y, self.robot_r
+        offset = 0.15
+        ref_x = h + offset * math.cos(th)
+        ref_y = k + offset * math.sin(th)
 
-        # validate ball location helper method
-        def in_intake_zone(ref_x, ref_y, ball_pos: Point):
-            z_t = 0.06
-            xy_t = 0.10
-
-            dx = ball_pos.x - ref_x
-            dy = ball_pos.y - ref_y
-
-            th = self.robot_r
-
-            # world --> robot frame
-            dx_r =  np.cos(th) * dx + np.sin(th) * dy
-            dy_r = -np.sin(th) * dx + np.cos(th) * dy
-
-            return (
-                abs(dx_r) < xy_t and
-                abs(dy_r) < xy_t and
-                ball_pos.z < z_t
-            )
-        
-        # check all objects for a collision
-        for ball in self.objects.object_array:
-            if in_intake_zone(x, y, ball.location): # maybe just make this return true/false?
-
-                # call the intake service --> intake.py (also need to determine color!)
-                intake_req = IntakeBall.Request()
-                intake_req.ball_id = ball.id
-                intake_req.color = self.ball_color(ball)
-                self.intake_ball.call_async(intake_req)
+        for el in self.elements.elements:
+            dx, dy = el.location.x - ref_x, el.location.y - ref_y
+            dx_r = math.cos(th) * dx + math.sin(th) * dy
+            dy_r = -math.sin(th) * dx + math.cos(th) * dy
+            if abs(dx_r) < 0.10 and abs(dy_r) < 0.10 and el.location.z < 0.12:
+                req = IntakeElement.Request()
+                req.entity_id = el.id
+                req.entity_type = el.element_type
+                req.top_color = el.top_color
+                req.bottom_color = el.bottom_color
+                self.intake_element.call_async(req)
+                self.get_logger().info(
+                    f"intaking {el.object_name} (type {el.element_type})")
                 return
-            
-        self.get_logger().info("no ball found")
-    
-    def ball_color(self, ball:Ball): #TODO: remove this and refactor to use the color attribute found in vex_interfaces/Ball.msg
-        '''return ball color. red = 1, blue = 2'''
-        red_identifyers = ["red", "R"]
-        if any(sub in ball.object_name for sub in red_identifyers):
-            return 1
-        else:
-            return 2
-        
-    def in_bounds(self, pose:Tuple, goal:Tuple, tol:tuple):
-        '''helper method so i dont have to type the same thing 20 times '''
-        error_x = abs(pose[0] - goal[0])
-        error_y = abs(pose[1] - goal[1])
-       # error_r = abs(pose[2] - goal[2])
+        self.get_logger().info("no element in intake zone")
 
-        if error_x < tol[0] and error_y < tol[1]: # add rotational error back soon ...
-            return True
-        else:
-            return False
-    
-    def get_quadrant(self):
-        '''which quadrant of the field am I in'''
-        if self.robot_x >= 0 and self.robot_y >= 0: # quadrant 1
-            return 1
-        elif self.robot_x < 0 and self.robot_y >= 0: # quadrant 2
-            return 2
-        elif self.robot_x < 0 and self.robot_y < 0: # quadrant 3
-            return 3
-        elif self.robot_x >= 0 and self.robot_y < 0: # quadrant 4
-            return 4
-        
     def check_location(self):
-        '''verify that I am in a location that I can score'''
-        robot_pose = (self.robot_x, self.robot_y)
-        q = self.get_quadrant()
+        """Nearest goal id to the robot (0 if too far)."""
+        best, best_d = 0, 0.7
+        for gid, (gx, gy, *_rest) in GOALS.items():
+            d = math.hypot(self.robot_x - gx, self.robot_y - gy)
+            if d < best_d:
+                best, best_d = gid, d
+        return best
 
-        long_goal_pts = (1.20, 0.7, -1.57) # y is estimated 
-        center_goal_pts = (0.20, 0.20, -(1.57/2)) # x and y are estimated off of calculated ball placement of (0.15, 0.15)
+    def scoring_callback(self, element_type):
+        goal_id = self.check_location()
+        self.get_logger().info(f'placing element type {element_type} at goal {goal_id}')
+        req = ScoreElement.Request()
+        req.element_type = element_type
+        req.top_color = 0
+        req.bottom_color = 0
+        req.goal_id = goal_id
+        self.score_element.call_async(req)
 
-        match q:
-            case 1:
-                if self.in_bounds(robot_pose, long_goal_pts, self.tol):
-                    return 12
-                elif self.in_bounds(robot_pose, center_goal_pts,self.tol):
-                    return 11
-            case 2:
-                long_goal_pts = (-long_goal_pts[0], long_goal_pts[1])
-                center_goal_pts = (-center_goal_pts[0], center_goal_pts[1])
+    def flip_nearest_toggle(self):
+        best, best_d = -1, 1.0
+        for tid, quadrant in TOGGLE_QUADRANTS.items():
+            tx, ty = self.toggle_position(tid)
+            d = math.hypot(self.robot_x - tx, self.robot_y - ty)
+            if d < best_d:
+                best, best_d = tid, d
+        if best == -1:
+            self.get_logger().info("no toggle within range")
+            return
+        req = FlipToggle.Request()
+        req.toggle_id = best
+        req.state = -1
+        self.flip_toggle.call_async(req)
+        self.get_logger().info(f"flipping toggle {best}")
 
-                if self.in_bounds(robot_pose, long_goal_pts,self.tol):
-                    return 22
-                elif self.in_bounds(robot_pose, center_goal_pts,self.tol):
-                    return 21
-            case 3:
-                long_goal_pts = (-long_goal_pts[0], -long_goal_pts[1])
-                center_goal_pts = (-center_goal_pts[0], -center_goal_pts[1])
+    @staticmethod
+    def toggle_position(toggle_id):
+        quadrant = TOGGLE_QUADRANTS[toggle_id]
+        if quadrant == 'N':
+            return (0.0, 1.78)
+        if quadrant == 'E':
+            return (1.78, 0.0)
+        if quadrant == 'S':
+            return (0.0, -1.78)
+        return (-1.78, 0.0)
 
-                if self.in_bounds(robot_pose, long_goal_pts, self.tol):
-                    return 32
-                elif self.in_bounds(robot_pose, center_goal_pts, self.tol):
-                    return 31
-            case 4:
-                long_goal_pts = (long_goal_pts[0], -long_goal_pts[1])
-                center_goal_pts = (center_goal_pts[0], -center_goal_pts[1])
-               
-                if self.in_bounds(robot_pose, long_goal_pts, self.tol):
-                    return 42
-                elif self.in_bounds(robot_pose, center_goal_pts, self.tol):
-                    return 41
-        return 0
-    
-    def scoring_callback(self, height):
-        '''callback for the scoring function'''
-        location = self.check_location()
-        self.get_logger().info(f'Otto is at goal ID: {location}')
 
-        info = OutputBall.Request()
-        info.height = height
-        info.goal_id = location
-
-        self.ball_action.call_async(info)
-    
 def main(args=None):
     rclpy.init(args=args)
     node = FieldLocation()
@@ -387,6 +282,7 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

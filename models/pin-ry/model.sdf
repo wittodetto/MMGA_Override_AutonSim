@@ -1,0 +1,81 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <model name="pin-ry">
+    <static>false</static>
+    <link name="link">
+      <pose>0 0 0 0 0 0</pose>
+      <velocity_decay>
+        <linear>0.4</linear>
+      </velocity_decay>
+      <inertial>
+        <pose>0 0 0.0825 0 0 0</pose>
+        <mass>0.073</mass>
+        <inertia>
+          <ixx>0.000206</ixx>
+          <iyy>0.000206</iyy>
+          <izz>0.000081</izz>
+        </inertia>
+      </inertial>
+      <visual name="bottom_half">
+        <geometry>
+          <mesh>
+            <uri>model://pin-ry/meshes/pin-bottom.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+        <ambient>0.75 0.16 0.12 1</ambient>
+        <diffuse>0.75 0.16 0.12 1</diffuse>
+        <specular>0.1 0.1 0.1 1.0</specular>
+        <emissive>0 0 0 1</emissive>
+      </material>
+      </visual>
+      <visual name="top_half">
+        <pose>0 0 0.0907 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://pin-ry/meshes/pin-top.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+        <ambient>0.92 0.74 0.1 1</ambient>
+        <diffuse>0.92 0.74 0.1 1</diffuse>
+        <specular>0.1 0.1 0.1 1.0</specular>
+        <emissive>0 0 0 1</emissive>
+      </material>
+      </visual>
+      <collision name="collision">
+        <pose>0 0 0.0825 0 0 0</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.047</radius>
+            <length>0.165</length>
+          </cylinder>
+        </geometry>
+        <surface>
+          <friction>
+            <ode>
+              <mu>0.6</mu>
+              <mu2>0.6</mu2>
+            </ode>
+          </friction>
+        </surface>
+      </collision>
+    </link>
+    <plugin filename="gz-sim-pose-publisher-system" name="gz::sim::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <publish_visual_pose>false</publish_visual_pose>
+      <publish_collision_pose>false</publish_collision_pose>
+      <publish_sensor_pose>false</publish_sensor_pose>
+      <publish_model_pose>true</publish_model_pose>
+      <publish_nested_model_pose>true</publish_nested_model_pose>
+      <use_pose_vector_msg>false</use_pose_vector_msg>
+      <update_frequency>20</update_frequency>
+      <static_publisher>false</static_publisher>
+      <static_update_frequency>1</static_update_frequency>
+    </plugin>
+    <plugin filename="rollingFriction" name="rolling_friction::RollingFrictionPlugin">
+      <link_name>link</link_name>
+      <coefficient>0.01</coefficient>
+    </plugin>
+  </model>
+</sdf>

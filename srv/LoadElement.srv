@@ -1,0 +1,8 @@
+# Match loads an element onto a loader.
+# loader_id: 0..3 (0=red top-left, 1=red bottom-left, 2=blue top-right, 3=blue bottom-right)
+int32 loader_id
+int8 element_type
+int8 top_color
+int8 bottom_color
+---
+bool success

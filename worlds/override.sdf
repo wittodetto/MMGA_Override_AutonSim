@@ -1,0 +1,212 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+  <world name="override">
+    <scene>
+      <ambient>0.45 0.45 0.5 1</ambient>
+      <background>0.2 0.2 0.25 1</background>
+      <shadows>true</shadows>
+      <sky>
+        <clouds>
+          <speed>1</speed>
+        </clouds>
+      </sky>
+    </scene>
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 3 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -1</direction>
+    </light>
+    <include>
+      <name>override-field</name>
+      <uri>model://override-field</uri>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_center</name>
+      <uri>model://goal-center</uri>
+      <pose>0 0 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_neutral_1</name>
+      <uri>model://goal-neutral</uri>
+      <pose>-0.6 1.2 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_neutral_2</name>
+      <uri>model://goal-neutral</uri>
+      <pose>-1.2 0.6 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_neutral_3</name>
+      <uri>model://goal-neutral</uri>
+      <pose>1.2 -0.6 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_neutral_4</name>
+      <uri>model://goal-neutral</uri>
+      <pose>0.6 -1.2 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_red_1</name>
+      <uri>model://goal-alliance-red</uri>
+      <pose>-1.2 -0.6 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_red_2</name>
+      <uri>model://goal-alliance-red</uri>
+      <pose>-0.6 -1.2 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_blue_1</name>
+      <uri>model://goal-alliance-blue</uri>
+      <pose>0.6 1.2 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>goal_blue_2</name>
+      <uri>model://goal-alliance-blue</uri>
+      <pose>1.2 0.6 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>toggle_1</name>
+      <uri>model://toggle</uri>
+      <pose>0 1.78 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>toggle_2</name>
+      <uri>model://toggle</uri>
+      <pose>1.78 0 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <name>toggle_3</name>
+      <uri>model://toggle</uri>
+      <pose>0 -1.78 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>toggle_4</name>
+      <uri>model://toggle</uri>
+      <pose>-1.78 0 0 0 0 1.5708</pose>
+    </include>
+    <include>
+      <name>loader_1</name>
+      <uri>model://loader</uri>
+      <pose>-1.74 1.49 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>loader_2</name>
+      <uri>model://loader</uri>
+      <pose>-1.74 -1.49 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>loader_3</name>
+      <uri>model://loader</uri>
+      <pose>1.74 1.49 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>loader_4</name>
+      <uri>model://loader</uri>
+      <pose>1.74 -1.49 0 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_ry_1</name>
+      <uri>model://pin-ry</uri>
+      <pose>-0.6 1.745 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_by_1</name>
+      <uri>model://pin-by</uri>
+      <pose>0.6 1.745 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_1</name>
+      <uri>model://cup</uri>
+      <pose>-1.2 1.2 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_2</name>
+      <uri>model://cup</uri>
+      <pose>1.2 1.2 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_ry_2</name>
+      <uri>model://pin-ry</uri>
+      <pose>-1.745 0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_3</name>
+      <uri>model://cup</uri>
+      <pose>-0.6 0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_yy_1</name>
+      <uri>model://pin-yy</uri>
+      <pose>0 0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_4</name>
+      <uri>model://cup</uri>
+      <pose>0.6 0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_by_2</name>
+      <uri>model://pin-by</uri>
+      <pose>1.745 0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_rb_1</name>
+      <uri>model://pin-rb</uri>
+      <pose>-0.6 0 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_rb_2</name>
+      <uri>model://pin-rb</uri>
+      <pose>0.6 0 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_by_3</name>
+      <uri>model://pin-by</uri>
+      <pose>-1.745 -0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_5</name>
+      <uri>model://cup</uri>
+      <pose>-0.6 -0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_yy_2</name>
+      <uri>model://pin-yy</uri>
+      <pose>0 -0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_6</name>
+      <uri>model://cup</uri>
+      <pose>0.6 -0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_ry_3</name>
+      <uri>model://pin-ry</uri>
+      <pose>1.745 -0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_7</name>
+      <uri>model://cup</uri>
+      <pose>-1.2 -1.2 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_8</name>
+      <uri>model://cup</uri>
+      <pose>1.2 -1.2 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_by_4</name>
+      <uri>model://pin-by</uri>
+      <pose>-0.6 -1.745 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_ry_4</name>
+      <uri>model://pin-ry</uri>
+      <pose>0.6 -1.745 0.01 0 0 0</pose>
+    </include>
+  </world>
+</sdf>

@@ -1,0 +1,7 @@
+# Flip a wall toggle. state < 0 cycles to the next state.
+# 0 = neutral (yellow), 1 = red, 2 = blue
+int32 toggle_id
+int8 state
+---
+bool success
+int8 new_state

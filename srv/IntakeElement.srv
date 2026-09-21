@@ -1,0 +1,7 @@
+# Robot picks an element up from the field (deletes it from the world).
+int32 entity_id
+int8 entity_type
+int8 top_color
+int8 bottom_color
+---
+bool success

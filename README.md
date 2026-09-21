@@ -1,157 +1,120 @@
-# pushback_sim
-Simulation worlds, maps, CAD models, and game behavior nodes for the VEX Push Back field + a few test envionments. See the repository `Autonomous-VEXU/otto_gazebo` for robot simulation assets.
+# override_sim
 
-> Note: If you want to prevent infinite rolling, refer to [this section](#rolling-friction-plugin-setup)
+Simulation worlds, maps, CAD models, and game behavior nodes for the **VEX V5RC Override (2026-27)** field, built on ROS 2 (Jazzy) + Gazebo Sim (Harmonic).
+
+This package is the Override-season conversion of the previous `pushback_sim` (VEX V5RC Push Back). Old Push Back assets are preserved under [`archive/`](archive/) (git history also keeps them).
+
+See the repository `Autonomous-VEXU/otto_gazebo` for the robot simulation assets.
+
+> Note: scoring elements need rolling friction to settle — see [Rolling Friction Plugin](#rolling-friction-plugin-setup).
 
 ## Getting Started
-In order to launch a world or really any launch file, the workspace must first be built and sourced. Make sure you are in the correct directory before running the commands: `colcon build --symlink-install` and then `source install/setup.bash`.
+
+Build and source the workspace, then launch:
+
+```bash
+colcon build --symlink-install
+source install/setup.bash
+```
 
 ### Launching a World (basic)
-Here is a general command to launch a specific world: </br>
+
 ```bash
-ros2 launch pushback_sim world_select.launch.py world:=<world>
+ros2 launch override_sim world_select.launch.py world:=override
 ```
-> Note: `<world>` is where you put the name of the world that you want to launch.
 
-### Running the Full Simulation (advanced)
-This launch file is the top level launch file for this package and is highly configurable through launch arguments.
-> Documentation can be found [here](#full_simulationlaunchpy)
+Available worlds: `override` (competition field with elements), `override_empty` (no elements), `block_test` (one of each element), `empty`.
+
+### Running the Full Simulation
+
 ```bash
-ros2 launch pushback_sim full_simulation.launch.py
+ros2 launch override_sim full_simulation.launch.py
 ```
-## Table of Contents:
-- [Available Worlds](#worlds--descriptions)
-- [Package File Tree](#package-file-structure)
-- [Launch Files](#launch-files)
-- [Nodes](#nodes)
-- [Rolling Friction Plugin](#rolling-friction-plugin-setup)
-- [ROS + Gazebo Sim Resources](#ros--gazebo-sim-resources)
 
-## Worlds + Descriptions
-`block_test`: Empty world with one of each block model</br>
-`empty`: Just as it sounds, a completely empty world </br>
-`empty_field`: VEX Push Back field with no blocks</br>
-`pushback`: VEX Push Back field set up to competition standards</br>
-`sensor_test`: Asymmetric field used for testing sensors setups in sim</br>
+Launch arguments: `world_ctrl`, `teleop`, `nav2`, `keepout_filter`, `opponent`, `sai` (see the file).
 
-## Package File Structure:
+## The Override Game (implemented rules)
+
+- **Field**: 12' × 12'. 9 octagonal Goals — 1 tall neutral center goal, 4 short neutral goals (one per quadrant), 2 red and 2 blue alliance goals. 4 wall Toggles (one per quadrant). 4 Loaders adjacent to the alliance stations.
+- **Scoring objects**: 63 bicolor Pins (`pin-ry`, `pin-by`, `pin-yy`, `pin-rb`) and 56 Cups (one opaque half + one transparent half).
+- **Scoring** (per official manual SC1–SC7):
+  - Each visible pin terminal (half) worth 5 pts for red/blue, 10 pts for yellow.
+  - A terminal hidden behind a cup's opaque half does not score (simplified model: cup yaw selects the hidden terminal).
+  - Yellow pins in a quadrant are owned by the alliance matching that quadrant's Toggle; yellow pins on the center goal are owned by the alliance with more robots in the Midfield.
+  - Robots in the Midfield (central 48″ diamond) score 8 pts each.
+  - Autonomous bonus: +12 (or +6 each on a tie) to the alliance with more autonomous points — enabled with `autonomous:=true` (world_services switches the phase after 15 s).
+- **Quadrants**: the four triangular regions between the field diagonals — N (top), E (right), S (bottom), W (left). Each contains 1 alliance goal + 1 short neutral goal + 1 Toggle.
+- **Midfield**: diamond |x|+|y| ≤ 0.6 m (white tape square around the center goal).
+- **Autonomous line**: the two diagonal tape segments running corner-to-center; robots start on their alliance side (red: x < 0, blue: x > 0).
+
+> ⚠️ Fidelity notes: Pin/cup/goal dimensions follow the official manual Appendix A (A5/A6/A7); the cup terminal-coverage rule is a documented simplification (cup yaw ↔ hidden half), and the field starts with the official 20-element VEXcode VR layout rather than the full 119-element match layout. Referee-grade edge cases (AWP, SG12, contact standards) are not simulated.
+
+## Package File Structure
+
 ```
-pushback_sim/
+override_sim/
 ├── launch/
-│   ├── full_simulation.launch.py
-│   ├── opponent.launch.py
-│   ├── sim_backend.launch.py
-│   ├── strategy_ai.launch.py
-│   ├── tb3_field.launch.py
-│   └── world_select.launch.py
-├── maps/
-│   ├── keepout_full_goal.pgm
-│   ├── keepout_full_goal.yaml
-│   ├── vex_field_map.pgm
-│   └── vex_field_map.yaml
+│   ├── full_simulation.launch.py   # top-level: world + robot + backend + nav2 + sai
+│   ├── sim_backend.launch.py       # bridges + pose_bridge + field_location + world_services + scoring
+│   ├── world_select.launch.py      # gz sim server/client with a chosen world
+│   ├── opponent.launch.py          # blue-alliance opponent bot
+│   ├── strategy_ai.launch.py       # Strategy AI bridge + driver
+│   ├── tb3_field.launch.py         # gz sim + a TurtleBot3
+│   └── windows.launch.py           # minimal gz server/client for override.sdf
+├── maps/                           # Nav2 maps + keepout zones (generated by tools/gen_maps.py)
 ├── models/
-│   ├── blue-sphere
-│   ├── clear-objects
-│   ├── lidar-test-field
-│   ├── red-sphere
-│   └── vex-field
+│   ├── override-field              # walls, floor, midfield/quadrant tape, alliance stations
+│   ├── goal-center / goal-neutral / goal-alliance-red / goal-alliance-blue
+│   ├── pin-ry / pin-by / pin-yy / pin-rb
+│   ├── cup
+│   ├── toggle                      # 3-face triangular prism (yellow/red/blue)
+│   ├── loader
+│   └── opponent
+├── msg/  srv/                      # override_sim interfaces (rosidl)
 ├── src/
-│   ├── ai_driver.py
-│   ├── field_location.py
-│   ├── opponent.py
-│   ├── pose_bridge.py
-│   ├── scoring.py
-│   ├── strategy_ai_bridge.py
-│   └── world_services.py
-├── worlds/
-│   ├── block_test.sdf
-│   ├── empty_field.sdf
-│   ├── empty.sdf
-│   ├── pushback.sdf
-│   └── sensor_test.sdf
-├── CMakeLists.txt
-├── package.xml
-└── resources.txt
+│   ├── pose_bridge.py              # gz dynamic pose -> /_object_locations
+│   ├── field_location.py           # classify elements into goals/loaders/field; controller input
+│   ├── world_services.py           # intake / placement / loader / toggle-flip services, match phase
+│   ├── scoring.py                  # Override scoring -> /game_score, /score_detail
+│   ├── strategy_ai_bridge.py       # pack WorldState for the Strategy AI
+│   ├── ai_driver.py                # execute Strategy AI actions via Nav2
+│   └── opponent.py                 # wandering blue-alliance robot
+└── tools/                          # deterministic generators for meshes / models / worlds / maps
 ```
 
-#### Model Sub-Directory File Structure:
+## Nodes & Topics
+
+| Node | Publishes | Subscribes / Serves |
+|---|---|---|
+| `pose_bridge` | `/_object_locations` | gz `world/override/dynamic_pose/info` |
+| `field_location` | `/goals`, `/loaders`, `/field_objects` | `/_object_locations`, `/joy`, `/otto_pose`, `/toggles`; clients `/robot_intake`, `/score_element`, `/flip_toggle` |
+| `world_services` | `/toggles`, `/robot_elements`, `/elements_remaining`, `/game_phase` | serves `/robot_intake`, `/score_element`, `/loader`, `/flip_toggle`; gz create/remove/set_pose |
+| `scoring` | `/game_score` [red, blue], `/score_detail` | `/goals`, `/otto_pose`, `/opponent/pose`, `/game_phase` |
+| `strategy_ai_bridge` | `/sai_input` | everything above |
+| `ai_driver` | Nav2 goal, `/ai_goal_marker` | `/sai_output` |
+
+### Controller mapping (teleop)
+
+- **Button 0** — intake the element in front of the robot
+- **Button 1** — place a pin on the nearest goal
+- **Button 2** — place a cup on the nearest goal
+- **Button 3** — flip the nearest wall Toggle
+
+## Rolling Friction Plugin
+
+The pin/cup models load the `rollingFriction` plugin so elements settle without endless rolling. Build it from `kymadogg/gz_rolling_friction` and make sure it is on the plugin path, then set `GZ_SIM_SYSTEM_PLUGIN_PATH` accordingly:
+
+```bash
+export GZ_SIM_SYSTEM_PLUGIN_PATH=$GZ_SIM_SYSTEM_PLUGIN_PATH:/path/to/gz_rolling_friction/build
 ```
-models/
-└── model-name/
-    ├── meshes/
-    │   ├── model-part.dae
-    │   └── model-part-collision.dae
-    ├── model.config
-    └── model.sdf
+
+## Regenerating Assets
+
+All meshes, models, worlds and maps are generated by deterministic scripts:
+
+```bash
+python3 tools/gen_meshes.py    # STL meshes for pins / cups / goals
+python3 tools/gen_models.py    # model.sdf + model.config for every element
+python3 tools/gen_worlds.py    # override.sdf / override_empty.sdf
+python3 tools/gen_maps.py      # Nav2 maps + keepout
 ```
-## Launch Files
-### `full_simulation.launch.py`
-Launches the full simulation. This is the top level launch file for this package.
-Arguments:
-- `keepout_filter`: toggles using the keepout filter for the goals
-- `opponent`: toggles opponent spawning into world + other nodes launching
-- `teleop`: conditionally launches teleop control
-- `world_ctrl`: toggles simulation post tracking and backend services
-- `nav2`: toggles nav2 mppi controller
-- `sai`: toggles the strategy AI model
-
-### `opponent.launch.py`
-Launches the opponent node and gazebo bridge node.
-
-### `sim_backend.launch.py`
-Launches all of the nodes that deal with simulaton logic/making the game playable. Includes `field_location.py`, `pose_bridge.py`, `scoring.py`, and `world_services.py`.
-
-### `strategy_ai.launch.py`
-Launches the sai (strategy AI) node 
-Arguments:
-- `ai_delay`: mount of time to delay launching the strategy AI model
-
-### `tb3_field.launch.py`
-Turtlebot3 + one of the worlds.
-Arguments:
-- `x_pose`: spawn in at a specific X coordinate
-- `y_pose`: spawn in at a specific Y coordinate
-- `z_pose`: spawn in at a specific Z coordinate
-
-### `windows.launch.py`
-Launches the sim for Windows :(
-
-### `world_select.launch.py`
-Selects a world SDF file to load in Gazebo Sim.
-Arguments:
-- `world`: the world filename without the '.sdf' 
-
-## Nodes
-### `ai_driver.py`
-Interprets the output of the strategy AI node and calls actions to control Otto. Just uses the Nav2 move to pose action for now.
-
-### `field_location.py`
-Determines if an action (i.e. picking up a ball) can occur based on Otto's location and orientation. Basically collision checking for goal hitboxes to vaildate scoring.
-
-### `opponent.py`
-Spawns in and randomly moves a box to predetermined points to simulate an opponent for the strategy AI node.
-
-### `pose_bridge.py`
-Purpose of this node is to listen to the gazebo topic `/world/default/dynamic_pose/info`, parse the data (JSON) reformat it to include the name of the model and its ID number and republishes it on the `/object_locations` topic.
-
-### `scoring.py`
-Takes in `vex_interfaces/Goal` and returns the overall score. Includes control zones. 
-
-### `strategy_ai_bridge.py`
-Collected world state information from various topics, packaged them into a `vex_interfaces/WorldState` message, and published them to a topic that the strategy AI node subscribes to.
-
-### `world_services.py`
-Exposes a few services for adding things to loaders, intaking a ball, and outputting a ball (determines if ball falls on the ground or is scored). Main purpose is to communicate with the gazebo sim topic to manipulate entites.
-
-## Rolling Friction Plugin Setup 
-Both the blue and red spheres use a gazebo plugin called `rolling_friction::RollingFrictionPlugin` the plugin + install instructions can be found here: [kymadogg/gz_rolling_friction](https://github.com/kymadogg/gz_rolling_friction/tree/main)
-
-## ROS + Gazebo Sim Resources:
-[ROS2 Jazzy Jalisco Documentation](https://docs.ros.org/en/jazzy/index.html)</br>
-[ROS Index](https://index.ros.org/?search_packages=true#jazzy)</br>
-[Nav2 Documentation](https://docs.nav2.org)</br>
-[Gazebo Harmonic Documentation](https://gazebosim.org/docs/harmonic/getstarted)</br>
-[Open Robotics Discourse](https://discourse.openrobotics.org)</br>
-[Robotics Stack Exchange](https://robotics.stackexchange.com)</br>
-[Simulation Description Format (SDF)](http://sdformat.org) </br>
-[RGBA 0-1 Color Picker](https://rgbcolorpicker.com/0-1)

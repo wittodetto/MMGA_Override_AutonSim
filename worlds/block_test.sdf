@@ -1,82 +1,48 @@
-<?xml version="1.0"?>
-<sdf version="1.6">
+<?xml version="1.0" ?>
+<sdf version="1.7">
   <world name="block_test">
-    <plugin
-      filename="gz-sim-physics-system"
-      name="gz::sim::systems::Physics">
-    </plugin>
-
-    <plugin
-      filename="gz-sim-user-commands-system"
-      name="gz::sim::systems::UserCommands">
-    </plugin>
-
-    <plugin
-      filename="gz-sim-scene-broadcaster-system"
-      name="gz::sim::systems::SceneBroadcaster">
-    </plugin> 
-
-    <plugin
-      filename="gz-sim-sensors-system"
-      name="gz::sim::systems::Sensors">
-      <render_engine>ogre2</render_engine>
-    </plugin>
-
-    <plugin
-      filename="gz-sim-imu-system"
-      name="gz::sim::systems::Imu">
-    </plugin>
-
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Ground Plane</uri>
-    </include>
-
-    <include>
-      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Sun</uri>
-    </include>
-
     <scene>
-      <shadows>false</shadows>
+      <ambient>0.45 0.45 0.5 1</ambient>
+      <background>0.2 0.2 0.25 1</background>
+      <shadows>true</shadows>
     </scene>
+    <light name="sun" type="directional">
+      <pose>0 0 3 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -1</direction>
+    </light>
 
-    <gui fullscreen='0'>
-      <camera name='user_camera'>
-        <pose frame=''>0.319654 -0.235002 9.29441 0 1.5138 0.009599</pose>
-        <view_controller>orbit</view_controller>
-        <projection_type>perspective</projection_type>
-      </camera>
-    </gui>
-
-    <physics type="ode">
-      <real_time_update_rate>100.0</real_time_update_rate> <!--used to be 1000.0-->
-      <max_step_size>0.01</max_step_size> <!--this used to be 0.001-->
-      <max_contacts>100</max_contacts> <!-- used to hopefully reduce lag -->
-      <ode>
-        <solver>
-          <type>quick</type>
-          <iters>150</iters>
-          <precon_iters>0</precon_iters>
-          <sor>1.400000</sor>
-          <use_dynamic_moi_rescaling>1</use_dynamic_moi_rescaling>
-        </solver>
-        <constraints>
-          <cfm>0.00001</cfm>
-          <erp>0.2</erp>
-          <contact_max_correcting_vel>2000.000000</contact_max_correcting_vel>
-          <contact_surface_layer>0.01000</contact_surface_layer>
-        </constraints>
-      </ode>
-    </physics>
-
-    <include name="sphere_r">
-        <uri>model://red-sphere</uri>
-        <pose>-1 1 0.5 0 0 0</pose>
+    <include>
+      <uri>model://override-field</uri>
+      <pose>0 0 0 0 0 0</pose>
     </include>
 
-    <include name="sphere_b">
-        <uri>model://blue-sphere</uri>
-        <pose>0 1 0.5 0 0 0</pose>
+    <!-- one of each scoring element -->
+    <include>
+      <name>pin_ry_1</name>
+      <uri>model://pin-ry</uri>
+      <pose>-0.6 0.6 0.01 0 0 0</pose>
     </include>
-
+    <include>
+      <name>pin_by_1</name>
+      <uri>model://pin-by</uri>
+      <pose>-0.6 0.2 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_yy_1</name>
+      <uri>model://pin-yy</uri>
+      <pose>-0.6 -0.2 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>pin_rb_1</name>
+      <uri>model://pin-rb</uri>
+      <pose>-0.6 -0.6 0.01 0 0 0</pose>
+    </include>
+    <include>
+      <name>cup_1</name>
+      <uri>model://cup</uri>
+      <pose>0.6 0.0 0.01 0 0 0</pose>
+    </include>
   </world>
 </sdf>

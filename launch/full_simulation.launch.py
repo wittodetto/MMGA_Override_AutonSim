@@ -7,119 +7,120 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from ament_index_python.packages import get_package_share_directory
 from launch.conditions import IfCondition
 
+
 def generate_launch_description():
     # file + directory paths
-    this_dir = get_package_share_directory('pushback_sim')
+    this_dir = get_package_share_directory('override_sim')
     otto_gz = get_package_share_directory('otto_gazebo')
     otto_br = get_package_share_directory('otto_bringup')
 
-    keepout_filter = LaunchConfiguration('keepout_filter') # put in nav2 launch file soon
+    keepout_filter = LaunchConfiguration('keepout_filter')
     keepout_filter_cmd = DeclareLaunchArgument(
         'keepout_filter',
         default_value='true',
-        description='toggles using the keepout filter for the goals' 
-    ) 
+        description='toggles using the keepout filter for the goals'
+    )
 
-    # opponent toggle
     opponent_launch = LaunchConfiguration('opponent')
     opponent_launch_cmd = DeclareLaunchArgument(
         'opponent',
         default_value='false',
         description='toggles opponent spawning into world + other nodes launching'
-    ) 
+    )
 
-    # strategy AI bridge launch arg
     teleop_toggle = LaunchConfiguration('teleop')
     teleop_toggle_cmd = DeclareLaunchArgument(
         'teleop',
         default_value='true',
         description='conditionally launches teleop control'
-    ) 
+    )
 
     world_ctrl = LaunchConfiguration('world_ctrl')
     world_ctrl_cmd = DeclareLaunchArgument(
         'world_ctrl',
         default_value='true',
         description='toggles simulation post tracking and backend services'
-    ) 
+    )
 
     nav2_toggle = LaunchConfiguration('nav2')
     nav2_toggle_cmd = DeclareLaunchArgument(
         'nav2',
         default_value='false',
         description='toggles nav2 mppi controller'
-    ) 
+    )
 
     sai_toggle = LaunchConfiguration('sai')
     sai_toggle_cmd = DeclareLaunchArgument(
         'sai',
         default_value='true',
         description='toggles the strategy AI model'
-    ) 
+    )
 
     # world launch file
     world = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(this_dir, 'launch', 'world_select.launch.py')),
-        launch_arguments={'world': 'pushback'}.items()
+        PythonLaunchDescriptionSource(
+            os.path.join(this_dir, 'launch', 'world_select.launch.py')),
+        launch_arguments={'world': 'override'}.items()
     )
 
-    # spawn robot
+    # spawn robot (red alliance side, left of the autonomous line)
     otto = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(otto_gz, 'launch', 'spawn_robot.launch.py')),
-        launch_arguments={'x_pose': '0.0','y_pose': '-1.0'}.items()
+        PythonLaunchDescriptionSource(
+            os.path.join(otto_gz, 'launch', 'spawn_robot.launch.py')),
+        launch_arguments={'x_pose': '-1.0', 'y_pose': '0.0'}.items()
     )
 
-    # enable teleop control
     teleop = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(otto_br, 'launch', 'controller.launch.py')),
+        PythonLaunchDescriptionSource(
+            os.path.join(otto_br, 'launch', 'controller.launch.py')),
         condition=IfCondition(teleop_toggle)
     )
 
-    # all of the sim backend functions
     sim_backend = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(this_dir, 'launch', 'sim_backend.launch.py')),
+        PythonLaunchDescriptionSource(
+            os.path.join(this_dir, 'launch', 'sim_backend.launch.py')),
         condition=IfCondition(world_ctrl)
     )
 
-    # launchfile for basic nav2
     nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(otto_gz, 'launch', 'nav2.launch.py')),
+        PythonLaunchDescriptionSource(
+            os.path.join(otto_gz, 'launch', 'nav2.launch.py')),
         condition=IfCondition(nav2_toggle)
     )
 
-    # remove soon (move to nav2 launch in otto navigation)
-    costmap_filter = IncludeLaunchDescription(  
-        PythonLaunchDescriptionSource(os.path.join(otto_gz, 'launch', 'keepout_filter.launch.py')),
+    costmap_filter = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(otto_gz, 'launch', 'keepout_filter.launch.py')),
         launch_arguments={'use_sim_time': 'true'}.items(),
         condition=IfCondition(keepout_filter)
     )
 
-    # opponent launch file
-    opp_nodes = IncludeLaunchDescription(  
-        PythonLaunchDescriptionSource(os.path.join(this_dir, 'launch', 'opponent.launch.py')),
+    opp_nodes = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(this_dir, 'launch', 'opponent.launch.py')),
         launch_arguments={'use_sim_time': 'true'}.items(),
         condition=IfCondition(opponent_launch)
     )
 
-    # launch file for the strategy AI model
     sai_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(this_dir, 'launch', 'strategy_ai.launch.py')),
+        PythonLaunchDescriptionSource(
+            os.path.join(this_dir, 'launch', 'strategy_ai.launch.py')),
         condition=IfCondition(sai_toggle)
     )
 
     return LaunchDescription([
         opponent_launch_cmd,
-        keepout_filter_cmd,  # remove soon
+        keepout_filter_cmd,
         teleop_toggle_cmd,
         sai_toggle_cmd,
         nav2_toggle_cmd,
         world_ctrl_cmd,
         world,
         nav2_launch,
-        costmap_filter, # remove soon
+        costmap_filter,
         otto,
         opp_nodes,
         teleop,
         sim_backend,
-        sai_launch
+        sai_launch,
     ])

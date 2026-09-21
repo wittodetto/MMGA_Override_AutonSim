@@ -1,0 +1,8 @@
+# Robot requests to place an element from its intake onto a goal.
+# element_type: 1 = pin, 2 = cup
+int8 element_type
+int8 top_color
+int8 bottom_color
+int32 goal_id
+---
+bool success

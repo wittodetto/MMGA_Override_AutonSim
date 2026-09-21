@@ -1,11 +1,10 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>pushback_sim</name>
-  <version>0.0.0</version>
-  <description>VEX V5RC Push Back simulated using Gazebo Sim</description>
+  <name>override_sim</name>
+  <version>0.1.0</version>
+  <description>VEX V5RC Override (2026-27) simulated using Gazebo Sim: worlds, maps, CAD models, and game behavior nodes. Converted from pushback_sim.</description>
   <maintainer email="kmhswimgirl@gmail.com">kylie herbstzuber</maintainer>
-  <buildtool_depend>ament_cmake</buildtool_depend>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -18,13 +17,14 @@
 
   <build_depend>geometry_msgs</build_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <build_depend>std_msgs</build_depend>
+  <exec_depend>std_msgs</exec_depend>
+
+  <depend>rosidl_default_runtime</depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-
-  <exec_depend>vex_interfaces</exec_depend>
-  <build_depend>vex_interfaces</build_depend>
-  <build_export_depend>vex_interfaces</build_export_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

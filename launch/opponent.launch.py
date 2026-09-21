@@ -17,7 +17,7 @@ def generate_launch_description():
     # opponent model node
     opponent_node = Node(
         package='override_sim',
-        executable='opponent.py',
+        executable='opponent',
         output='screen'
     )
 

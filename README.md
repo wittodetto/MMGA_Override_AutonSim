@@ -2,9 +2,11 @@
 
 Simulation worlds, maps, CAD models, and game behavior nodes for the **VEX V5RC Override (2026-27)** field, built on ROS 2 (Jazzy) + Gazebo Sim (Harmonic).
 
-This package is the Override-season conversion of the previous `pushback_sim` (VEX V5RC Push Back). Old Push Back assets are preserved under [`archive/`](archive/) (git history also keeps them).
+This package is the Override-season conversion of the previous `pushback_sim` (VEX V5RC Push Back), with all game nodes written in **C++ (rclcpp)**. Old Push Back assets are preserved under [`archive/`](archive/) (git history also keeps them).
 
 See the repository `Autonomous-VEXU/otto_gazebo` for the robot simulation assets.
+
+> The original Python node implementations are kept in `src/*.py` as a readable reference and are used by the offline logic tests (`tests/test_override_logic.py`); the runtime nodes are the C++ executables built from `src/*.cpp`.
 
 > Note: scoring elements need rolling friction to settle — see [Rolling Friction Plugin](#rolling-friction-plugin-setup).
 
@@ -71,22 +73,25 @@ override_sim/
 │   ├── loader
 │   └── opponent
 ├── msg/  srv/                      # override_sim interfaces (rosidl)
-├── src/
-│   ├── pose_bridge.py              # gz dynamic pose -> /_object_locations
-│   ├── field_location.py           # classify elements into goals/loaders/field; controller input
-│   ├── world_services.py           # intake / placement / loader / toggle-flip services, match phase
-│   ├── scoring.py                  # Override scoring -> /game_score, /score_detail
-│   ├── strategy_ai_bridge.py       # pack WorldState for the Strategy AI
-│   ├── ai_driver.py                # execute Strategy AI actions via Nav2
-│   └── opponent.py                 # wandering blue-alliance robot
+├── include/override_sim/           # field_constants.h (shared field data + quats)
+├── src/                            # C++ nodes (rclcpp):
+│   ├── pose_bridge.cpp             #   gz dynamic poses -> /_object_locations
+│   ├── field_location.cpp          #   classify elements into goals/loaders/field
+│   ├── world_services.cpp          #   intake / placement / loader / toggle services
+│   ├── scoring.cpp                 #   Override scoring -> /game_score, /score_detail
+│   ├── strategy_ai_bridge.cpp      #   pack WorldState for the Strategy AI
+│   ├── ai_driver.cpp               #   execute Strategy AI actions via Nav2
+│   └── opponent.cpp                #   wandering blue-alliance robot
+│   (*.py files kept as reference / offline-test logic)
+├── tests/                          # offline logic tests (import the Python refs)
 └── tools/                          # deterministic generators for meshes / models / worlds / maps
 ```
 
 ## Nodes & Topics
 
-| Node | Publishes | Subscribes / Serves |
+| Node (C++) | Publishes | Subscribes / Serves |
 |---|---|---|
-| `pose_bridge` | `/_object_locations` | gz `world/override/dynamic_pose/info` |
+| `pose_bridge` | `/_object_locations` | gz `world/override/dynamic_pose/info` (via ros_gz_bridge, `ros_gz_interfaces/msg/Pose_V`) |
 | `field_location` | `/goals`, `/loaders`, `/field_objects` | `/_object_locations`, `/joy`, `/otto_pose`, `/toggles`; clients `/robot_intake`, `/score_element`, `/flip_toggle` |
 | `world_services` | `/toggles`, `/robot_elements`, `/elements_remaining`, `/game_phase` | serves `/robot_intake`, `/score_element`, `/loader`, `/flip_toggle`; gz create/remove/set_pose |
 | `scoring` | `/game_score` [red, blue], `/score_detail` | `/goals`, `/otto_pose`, `/opponent/pose`, `/game_phase` |

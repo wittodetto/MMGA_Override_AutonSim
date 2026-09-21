@@ -11,7 +11,8 @@ def generate_launch_description():
         arguments=[
             '/world/override/remove@ros_gz_interfaces/srv/DeleteEntity',
             '/world/override/create@ros_gz_interfaces/srv/SpawnEntity',
-            '/world/override/set_pose@ros_gz_interfaces/srv/SetEntityPose'
+            '/world/override/set_pose@ros_gz_interfaces/srv/SetEntityPose',
+            '/world/override/dynamic_pose/info@ros_gz_interfaces/msg/Pose_V@gz.msgs.Pose_V'
         ],
         parameters=[{'use_sim_time': True}],
         output='screen'
@@ -29,25 +30,25 @@ def generate_launch_description():
     # element pose tracking
     object_poses = Node(
         package='override_sim',
-        executable='pose_bridge.py'
+        executable='pose_bridge'
     )
 
     # field locations
     locator = Node(
         package='override_sim',
-        executable='field_location.py'
+        executable='field_location'
     )
 
     # world services endpoint
     world_services = Node(
         package='override_sim',
-        executable='world_services.py'
+        executable='world_services'
     )
 
     # scoring the game
     scoring = Node(
         package='override_sim',
-        executable='scoring.py',
+        executable='scoring',
         output='screen'
     )
 

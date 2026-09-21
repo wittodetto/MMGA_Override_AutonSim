@@ -18,7 +18,7 @@ def generate_launch_description():
     # strategy AI bridge
     sai_bridge = Node(
         package='override_sim',
-        executable='strategy_ai_bridge.py',
+        executable='strategy_ai_bridge',
         output='screen'
     )
 
@@ -29,7 +29,7 @@ def generate_launch_description():
 
     ai_driver_node = Node(
         package='override_sim',
-        executable='ai_driver.py',
+        executable='ai_driver',
         output='screen'
     )
 

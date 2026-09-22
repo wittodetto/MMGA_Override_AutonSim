@@ -53,3 +53,5 @@ CATKIN_IGNORE
 #vs code crap
 /.vscode
 /log
+# noros sim test outputs
+noros/runs/

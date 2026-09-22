@@ -4,6 +4,8 @@ Simulation worlds, maps, CAD models, and game behavior nodes for the **VEX V5RC 
 
 This package is the Override-season conversion of the previous `pushback_sim` (VEX V5RC Push Back), with all game nodes written in **C++ (rclcpp)**. Old Push Back assets are preserved under [`archive/`](archive/) (git history also keeps them).
 
+> **No-ROS version**: a zero-dependency C++17 port of this package lives in [`noros/`](noros/) — same field, same SC1–SC7 scoring, same standardized maps, but builds with only a compiler (`./noros/build.sh`). See [`noros/README.md`](noros/README.md).
+
 See the repository `Autonomous-VEXU/otto_gazebo` for the robot simulation assets.
 
 > The original Python node implementations are kept in `src/*.py` as a readable reference and are used by the offline logic tests (`tests/test_override_logic.py`); the runtime nodes are the C++ executables built from `src/*.cpp`.

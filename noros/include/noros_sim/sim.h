@@ -117,6 +117,7 @@ private:
   void do_action(int action, Robot & r);
   void intake_nearest(Robot & r);
   void place_pin(Robot & r);
+  void place_cup(Robot & r);
   void flip_nearest(Robot & r);
   bool blocked(double x, double y) const;
   void opponent_step(double dt);

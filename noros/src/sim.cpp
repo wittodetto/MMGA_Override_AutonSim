@@ -47,6 +47,42 @@ const std::vector<AutonRoutine> & builtin_autons()
         {0.25, 0.25, 0},    // drive into the midfield diamond (clear of center goal)
       },
     },
+    {
+      "west_goal",
+      "West quadrant: intake the west red/yellow pin, score it on the west "
+      "neutral goal, flip the west toggle red.",
+      -1.6, 0.5, 0.0,
+      {
+        {-1.55, 0.75, 3},   // intake pin_ry_2 (west wall, omnidirectional)
+        {-1.00, 0.95, 2},   // place pin north of neutral goal 2 (W)
+        {-1.30, 0.10, 1},   // flip west toggle (3) -> red
+      },
+    },
+    {
+      "center_goal",
+      "Center: intake the center yellow pin, score it on the tall center goal, "
+      "then park in the Midfield so red owns the yellow terminals.",
+      -1.6, 0.0, 0.0,
+      {
+        {0.10, 0.65, 3},    // intake pin_yy_1 only (cup_3 is out of range)
+        {0.30, 0.30, 2},    // place pin on center goal 0, robot sits in midfield
+      },
+    },
+    {
+      "cup_cover_test",
+      "Coverage demo: score pin_ry_1 on the north neutral goal, flip the north "
+      "toggle red (15 pts), then cover the pin with cup_1 whose opaque half "
+      "hides the yellow bottom terminal (5 pts) — a data-driven coverage test.",
+      -1.6, 0.5, 0.0,
+      {
+        {-1.60, 1.00, 0},   // climb north first (clear of goal 2)
+        {-0.60, 1.55, 3},   // intake pin_ry_1 (north wall)
+        {-0.45, 1.32, 2},   // place pin beside neutral goal 1 (N)
+        {0.00, 1.55, 1},    // flip north toggle (0) -> red  (15 pts)
+        {-1.10, 1.25, 3},   // intake cup_1 (north-west corner)
+        {-0.60, 1.25, 4},   // place cup on goal 1 (yaw 0 hides yellow bottom)
+      },
+    },
   };
   return routines;
 }
@@ -169,13 +205,25 @@ void Sim::drive_toward(Robot & r, double tx, double ty, double dt, double max_v)
   if (std::abs(d_yaw) > 0.35) {
     v = 0.0;   // turn in place first
   } else {
-    v = std::min(max_v, 0.6 * dist);
+    v = std::min(max_v, 2.0 * dist);
   }
   const double nx = r.x + v * std::cos(r.yaw) * dt;
   const double ny = r.y + v * std::sin(r.yaw) * dt;
   if (!blocked(nx, ny)) {
     r.x = nx;
     r.y = ny;
+    return;
+  }
+  // obstacle on the heading: slide along the tangent until clear
+  const double slide = 0.04;
+  for (const double sign : {1.0, -1.0}) {
+    const double tx = r.x + sign * slide * std::cos(r.yaw + M_PI / 2.0);
+    const double ty = r.y + sign * slide * std::sin(r.yaw + M_PI / 2.0);
+    if (!blocked(tx, ty)) {
+      r.x = tx;
+      r.y = ty;
+      return;
+    }
   }
 }
 
@@ -246,6 +294,41 @@ void Sim::place_pin(Robot & r)
     el[1], el[2], goal_id, g.quadrant.c_str());
 }
 
+void Sim::place_cup(Robot & r)
+{
+  if (r.intake.empty()) {
+    return;
+  }
+  const int goal_id = NearestGoal(r.x, r.y, 0.9);
+  if (goal_id == -1) {
+    return;
+  }
+  const auto it = r.intake.begin();
+  if ((*it)[0] != 2) {
+    return;   // only cups are placed by this action
+  }
+  const std::array<int, 3> el = *it;
+  r.intake.pop_front();
+
+  const GoalInfo & g = kGoals.at(goal_id);
+  const double z = g.height + goal_count_[goal_id] * kStackStepZ + 0.02;
+  Element e;
+  e.id = next_element_id_++;
+  e.type = el[0];
+  e.top = 0;
+  e.bottom = 0;
+  e.x = g.x;
+  e.y = g.y;
+  e.z = z;
+  e.yaw = 0.0;   // opaque half faces the bottom terminal (hides it)
+  e.goal_id = goal_id;
+  e.name = "placed_cup_" + std::to_string(e.id);
+  goal_stacks_[goal_id].push_back(e);
+  goal_count_[goal_id] += 1;
+  std::printf("[auton] placed cup on goal %d (%s), yaw 0 -> covers bottom half\n",
+    goal_id, g.quadrant.c_str());
+}
+
 void Sim::flip_nearest(Robot & r)
 {
   const int tid = NearestToggle(r.x, r.y, 1.2);
@@ -263,6 +346,7 @@ void Sim::do_action(int action, Robot & r)
     case 1: flip_nearest(r); break;
     case 2: place_pin(r); break;
     case 3: intake_nearest(r); break;
+    case 4: place_cup(r); break;
     default: break;
   }
 }
@@ -284,7 +368,7 @@ void Sim::controller(double dt, Robot & r, const AutonRoutine & auton)
     do_action(st.action, r);
     auton_step_++;
   } else {
-    drive_toward(r, st.x, st.y, dt, 0.6);
+    drive_toward(r, st.x, st.y, dt, 0.85);
   }
 }
 
